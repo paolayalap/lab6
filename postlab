@@ -1,0 +1,341 @@
+; Archivo: main3.s
+; Dispositivo: PIC16F887
+; Autora: Paola Ayala Pineda
+; Compilador: pic-as (v2.35), MPLABX v6.00
+
+; Programa: Displays y PORTA incrementan cada 1000ms mientras que RB0 queda intermitente en 500ms.
+; Hardware: Displays en PORTC, leds en PORTA y led en RB0.
+
+; Creado:  28 de feb 2022
+; Última modificación: 5 de mar 2022
+
+ PROCESSOR 16F887
+
+; PIC16F887 Configuration Bit Settings
+
+; Assembly source line config statements
+
+; CONFIG1
+  CONFIG  FOSC = INTRC_NOCLKOUT ; Oscillator Selection bits (INTOSCIO oscillator: I/O function on RA6/OSC2/CLKOUT pin, I/O function on RA7/OSC1/CLKIN)
+  CONFIG  WDTE = OFF            ; Watchdog Timer Enable bit (WDT disabled and can be enabled by SWDTEN bit of the WDTCON register)
+  CONFIG  PWRTE = OFF            ; Power-up Timer Enable bit (PWRT enabled)
+  CONFIG  MCLRE = OFF           ; RE3/MCLR pin function select bit (RE3/MCLR pin function is digital input, MCLR internally tied to VDD)
+  CONFIG  CP = OFF              ; Code Protection bit (Program memory code protection is disabled)
+  CONFIG  CPD = OFF             ; Data Code Protection bit (Data memory code protection is disabled)
+  CONFIG  BOREN = OFF           ; Brown Out Reset Selection bits (BOR disabled)
+  CONFIG  IESO = OFF            ; Internal External Switchover bit (Internal/External Switchover mode is disabled)
+  CONFIG  FCMEN = OFF           ; Fail-Safe Clock Monitor Enabled bit (Fail-Safe Clock Monitor is disabled)
+  CONFIG  LVP = OFF              ; Low Voltage Programming Enable bit (RB3/PGM pin has PGM function, low voltage programming enabled)
+
+; CONFIG2
+  CONFIG  BOR4V = BOR40V        ; Brown-out Reset Selection bit (Brown-out Reset set to 4.0V)
+  CONFIG  WRT = OFF             ; Flash Program Memory Self Write Enable bits (Write protection off)
+
+
+
+// config statements should precede project file includes.
+#include <xc.inc>
+
+ RESET_TMR0 MACRO TMR_VAR
+    BANKSEL TMR0	    ; cambiamos de banco
+    MOVLW   TMR_VAR
+    MOVWF   TMR0	    ; configuramos tiempo de retardo
+    BCF	    T0IF	    ; limpiamos bandera de interrupción
+    ENDM
+
+ RESET_TMR1 MACRO TMR1_H, TMR1_L
+    MOVLW   TMR1_H	    ; Literal a guardar en TMR1H
+    MOVWF   TMR1H	    ; Guardamos literal en TMR1H
+    MOVLW   TMR1_L	    ; Literal a guardar en TMR1L
+    MOVWF   TMR1L	    ; Guardamos literal en TMR1L
+    BCF	    TMR1IF	    ; Limpiamos bandera de int. TMR1
+    ENDM
+
+ RESET_TMR2 macro
+    BANKSEL TRISA
+    MOVLW   122
+    MOVWF   PR2
+
+    BANKSEL PORTA
+    BCF	    TMR2IF
+    ENDM
+
+
+
+; ------- VARIABLES EN MEMORIA --------
+PSECT udata_shr			;Memoria compartida
+    W_TEMP:		DS 1
+    STATUS_TEMP:	DS 1
+
+PSECT udata_bank0
+    valor:		DS 2	;Contiene valor a mostrar en los displays de 7-seg
+    banderas:		DS 1	;Indica el display que hay que encender
+    unidades:		DS 1
+    decenas:		DS 1
+    contador:		DS 1	;Variable para contar lo del TMR2
+
+
+PSECT resVect, class=CODE, abs, delta=2
+;------------ VECTOR RESET --------------
+ORG 00h        ;posición 0000h para el reset
+resetVec:
+    PAGESEL MAIN
+    GOTO MAIN
+
+PSECT intVect, class=CODE, abs, delta=2
+;------- VECTOR INTERRUPCIONES ----------
+ORG 04h        ;posición para el interrupciones
+PUSH:
+    MOVWF   W_TEMP	    ; Guardamos W
+    SWAPF   STATUS, W
+    MOVWF   STATUS_TEMP	    ; Guardamos STATUS
+
+ISR:			    ;subrutina de interrupción
+    BTFSC   T0IF	    ; Fue interrupción del TMR0? No=0 Si=1
+    CALL    INT_TMR0	    ; Si -> Subrutina de interrupción de TMR0
+    BTFSC   TMR1IF	    ; Interrupcion de TMR1
+    CALL    INT_TMR1
+    BTFSC   TMR2IF	    ; Interrupcion de TMR2
+    CALL    INT_TMR2
+
+POP:
+    SWAPF   STATUS_TEMP, W
+    MOVWF   STATUS	    ; Recuperamos el valor de reg STATUS
+    SWAPF   W_TEMP, F
+    SWAPF   W_TEMP, W	    ; Recuperamos valor de W
+    RETFIE		    ; Regresamos a ciclo principal
+
+; ------ SUBRUTINAS DE INTERRUPCIONES ------
+INT_TMR0:
+    RESET_TMR0	194	   	;Reinicia TMR0 para 2ms
+    CLRF    PORTD		;Limpia PORTD
+    BTFSS   banderas, 0		;Revisar banderas
+    GOTO    DISPLAY_0		;Va a display_0
+
+    BTFSS   banderas, 1		;Revisa  banderas
+    GOTO    DISPLAY_1		;Va a display_1
+
+DISPLAY_0:
+    CLRF    banderas		;Limpia la variable banderas
+    BSF	    banderas, 0
+    MOVF    valor+0, W
+    MOVWF   PORTC
+    BSF	    PORTD, 1		;Transistor del display_0 en 1
+    RETURN
+
+DISPLAY_1:
+    BSF	    banderas, 1
+    MOVF    valor+1, W
+    MOVWF   PORTC
+    BSF	    PORTD, 0		;Transistor del display_1 en 1
+    RETURN
+
+INT_TMR1:
+    RESET_TMR1	0x85, 0xEE	 ;Se llama a reset_tmr1
+    INCF    PORTA		 ;Incremento PORTA
+    CALL    DISPLAY_UNI		 ;Se llama a display_uni
+    RESET_TMR1	0x85, 0xEE
+    RETURN
+
+INT_TMR2:
+    BCF	    TMR2IF		 ;Limpiamos la bandera de interrupcion TMR2
+    DECFSZ  contador, 1		 ;Se decrementa el contador
+    RETURN
+
+    MOVLW   1			 ;1 a W
+    MOVWF   contador		 ;W a contador_TMR2
+    BTFSC   PORTB, 0		 ;Si RB0 es 0 salta una linea
+    GOTO    OFF			 ;apaga
+    GOTO    ON			 ;enciende
+
+    OFF:
+    BCF	    PORTB, 0		 ;RB0 = 0
+    RETURN
+
+    ON:
+    BSF	    PORTB, 0		 ;RB0 = 1
+    RETURN
+
+
+PSECT code, delta=2, abs
+ORG 100h      ;posición para el código
+;----------------CONFIGURACIÓN------------
+MAIN:
+    CALL    CONFIG_IO	    ; Configuración de I/O
+    CALL    CONFIG_RELOJ    ; Configuración de reloj
+    CALL    CONFIG_TMR0	    ; Configuración de TMR0
+    CALL    CONFIG_TMR1	    ; Configuración de TMR1
+    CALL    CONFIG_TMR2	    ; Configuración de TMR2
+    CALL    CONFIG_INT	    ; Configuración de interrupciones
+    CALL    CLEARV
+
+
+LOOP:
+    CALL    MOSTRAR_DISPLAY
+    GOTO    LOOP    ; Código que se va a estar ejecutando mientras no hayan interrupciones
+
+;-----------------SUBRUTINAS-------------
+ ; temporización = 4 * (1/Fosc) * (256 - Tmr0) * Prescaler
+ ; 2 ms = 4 * (1/4 MHz) * (256 - Tmr0) * 8
+ ; Tmr0 = 6
+ ; 2 ms = 4 * (1/250 KHz) * (256 - Tmr0) * 2
+ ; Tmr0 = 194
+
+CONFIG_IO:
+    BSF	    STATUS, 5	    ;banco 11
+    BSF	    STATUS, 6
+    CLRF    ANSEL	    ;pines digitales
+    CLRF    ANSELH
+
+    BSF	    STATUS, 5	    ;banco 01
+    BCF	    STATUS, 6
+    CLRF    TRISA	    ;PORTA salida
+    BCF	    TRISB, 0	    ;RB0 salida
+    CLRF    TRISC	    ;PORTC salida de Diplays
+    BCF	    TRISD, 0	    ;RD0 salida
+    BCF	    TRISD, 1	    ;RD1 salida
+
+    BCF	    STATUS, 5	    ;banco 00
+    BCF	    STATUS, 6
+    CLRF    PORTA	    ;Limpiamos PORTA
+    CLRF    PORTB	    ;Limpiamos RB0
+    CLRF    PORTC	    ;Limpiamos PORTC
+    CLRF    PORTD	    ;Limpiamos PORTD
+    MOVLW   1
+    MOVWF   contador
+    RETURN
+
+ CONFIG_RELOJ:
+    BANKSEL OSCCON	    ; cambiamos a banco 01
+    BSF	    OSCCON, 0	    ; SCS -> 1, Usamos reloj interno
+    BCF	    OSCCON, 6
+    BSF	    OSCCON, 5
+    BCF	    OSCCON, 4	    ; IRCF<2:0> -> 010 250KHz
+    RETURN
+
+CONFIG_TMR0:
+    banksel TRISA
+    BCF    T0CS		; reloj interno
+    BCF	    PSA		; prescaler
+    BCF	    PS2
+    BCF	    PS1
+    BSF	    PS0		; PS = 001 DE 2
+    RESET_TMR0 194
+    return
+
+CONFIG_TMR1:
+    BANKSEL PORTA
+    BCF	    TMR1GE	;Cambiamos a banco 00
+    BCF	    T1CKPS1	;Prescaler2 2:1
+    BSF	    T1CKPS0
+    BCF	    T1OSCEN	;LP deshabilitado
+    BCF	    TMR1CS	;Reloj interno
+    BSF	    TMR1ON	;Prendemos TMR1
+    RESET_TMR1 0x85, 0xEE
+    RETURN
+
+CONFIG_TMR2:
+    BANKSEL T2CON	    ; Cambiamos a banco 00
+    BSF	    T2CKPS1	    ; prescaler 1:16
+    BSF	    T2CKPS0
+
+    BSF	    TOUTPS3	    ; postscaler 1:16
+    BSF	    TOUTPS2
+    BSF	    TOUTPS1
+    BSF	    TOUTPS0
+
+    BSF	    TMR2ON	    ; prendemos TMR2
+    BANKSEL TRISA
+    RESET_TMR2
+    RETURN
+
+CONFIG_INT:
+    BANKSEL PIE1	; Cambiamos a banco 01
+    BSF	    T0IE	;Interrupción TMR0
+    BSF	    TMR1IE	;Interrupcion TMR1
+    BSF	    TMR2IE	; Habilitamos interrupciones de TMR2
+
+    BANKSEL INTCON	; Cambiamos a banco 00
+    BSF	    PEIE	; Habilitamos interrupciones de perifericos
+    BSF	    GIE		; Habilitamos interrupciones
+    BSF	    T0IE	; Habilitamos interrupcion TMR0
+    BCF	    T0IF	; Limpiamos bandera de int. de TMR0
+    BCF	    TMR2IF	; Limpiamos bandera de TMR2
+    RETURN
+
+
+CLEARV:
+    BANKSEL PORTA	;Se limpian los puertos donde estarán las leds
+    CLRF    PORTA
+    CLRF    PORTB
+    CLRF    unidades
+    CLRF    decenas
+    RETURN
+
+DISPLAY_UNI:
+    INCF    unidades	    ;Incrementa el contador de unidades
+    MOVF    unidades, W     ;Movemos unidades al acu
+    SUBLW   10		    ;La resta del acu de 10 es para que quede en los 60 segundos 
+    BTFSS   ZERO	    ;Si es 0, pasa a goto
+    GOTO    $+2
+    CALL    DISPLAY_DEC	   
+    RETURN
+
+ DISPLAY_DEC:
+    CLRF    unidades	    ;Limpia el contador de unidades
+    INCF    decenas	    ;Incrementa decenas
+    MOVF    decenas, W	    ;Movemos decenas al accu
+    SUBLW   6		    ;Se le resta 6 para que el conteo llegue a 9
+    BTFSS   ZERO	    ;Si es 0, pasa a goto
+    GOTO    $+2
+    CLRF    decenas	    ;Se limpia decenas
+    RETURN
+
+    
+MOSTRAR_DISPLAY:
+    MOVF    unidades, W	    ;unidades al acu
+    CALL    TABLA
+    MOVWF   valor	    ;pasa lo del acu a valor
+    MOVF    decenas, W	    ;decenas al acu
+    CALL    TABLA
+    MOVWF   valor+1	    ;pasa lo del acu a valor+1
+    RETURN
+
+    
+    
+REINICIO:
+    MOVF    PORTA, W
+    SUBLW   255		    ;255 se le resta W
+    BTFSS   ZERO	    ;Si es 0 se salta la siguiente instruccion
+    RETURN
+    CLRF    unidades	    ;Limpia ambos contadores
+    CLRF    decenas
+    RETURN
+
+
+
+ ;---------------TABLA---------------
+    ORG 200h
+TABLA:
+    CLRF    PCLATH		; Limpiamos registro PCLATH
+    BSF	    PCLATH, 1		; Posicionamos el PC en dirección 02xxh
+    ANDLW   0x0F		; no saltar más del tamaño de la tabla
+    ADDWF   PCL
+    RETLW   00111111B	;0
+    RETLW   00000110B	;1
+    RETLW   01011011B	;2
+    RETLW   01001111B	;3
+    RETLW   01100110B	;4
+    RETLW   01101101B	;5
+    RETLW   01111101B	;6
+    RETLW   00000111B	;7
+    RETLW   01111111B	;8
+    RETLW   01101111B	;9
+    RETLW   01110111B	;A
+    RETLW   01111100B	;b
+    RETLW   00111001B	;C
+    RETLW   01011110B	;d
+    RETLW   01111001B	;E
+    RETLW   01110001B	;F
+
+END
